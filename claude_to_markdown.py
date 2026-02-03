@@ -141,6 +141,9 @@ def json_to_markdown(json_data, output_markdown_path):
         markdown_lines.append(f"**Total Events:** {session_metadata.get('event_count', 0)}\n")
         markdown_lines.append("---\n")
 
+        previous_speaker_key = None
+        grouped_messages = []
+
         for event in session_events:
             event_type = event.get('type')
             timestamp_str = event.get('timestamp', '')
@@ -154,19 +157,33 @@ def json_to_markdown(json_data, output_markdown_path):
                 if not message_text:
                     continue
 
+                current_speaker_key = (message_role, agent_label)
+
                 if timestamp_str:
                     timestamp_formatted = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
-                    time_display = f" - {timestamp_formatted}"
                 else:
-                    time_display = ""
+                    timestamp_formatted = None
 
-                if agent_label:
-                    markdown_lines.append(f"## {message_role.upper()} [{agent_label}]{time_display}\n")
-                else:
-                    markdown_lines.append(f"## {message_role.upper()}{time_display}\n")
+                if current_speaker_key != previous_speaker_key:
+                    if grouped_messages:
+                        markdown_lines.extend(grouped_messages)
+                        markdown_lines.append("---\n")
+                        grouped_messages = []
 
-                markdown_lines.append(f"{message_text}\n")
-                markdown_lines.append("---\n")
+                    if agent_label:
+                        markdown_lines.append(f"## {message_role.upper()} [{agent_label}]\n")
+                    else:
+                        markdown_lines.append(f"## {message_role.upper()}\n")
+
+                    previous_speaker_key = current_speaker_key
+
+                if timestamp_formatted:
+                    grouped_messages.append(f"{timestamp_formatted}")
+                grouped_messages.append(f"{message_text}\n")
+
+        if grouped_messages:
+            markdown_lines.extend(grouped_messages)
+            markdown_lines.append("---\n")
 
     with open(output_markdown_path, 'w', encoding='utf-8') as markdown_file:
         markdown_file.write('\n'.join(markdown_lines))
