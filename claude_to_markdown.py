@@ -1,6 +1,10 @@
 import json
+import os
 from pathlib import Path
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def load_jsonl_events(file_path):
@@ -333,9 +337,9 @@ def export_merged_log(project_path, output_filename, start_time=None, end_time=N
 
 
 if __name__ == "__main__":
+    claude_code_conversation_path = Path(os.environ['CLAUDE_PROJECTS_PATH'])
     output_directory = Path("output")
     json_output_filename = "conversation_export.json"
-    claude_code_conversation_path = Path("all_conversations")
     start_time = "2026-01-30"
     end_time = "2026-02-03"
     
