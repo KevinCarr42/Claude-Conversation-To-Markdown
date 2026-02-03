@@ -1,6 +1,4 @@
 import json
-import os
-import glob
 from pathlib import Path
 from datetime import datetime
 
@@ -19,11 +17,9 @@ def format_timestamp(epoch_time):
 
 
 def parse_iso_timestamp(iso_str):
-    """Convert ISO timestamp string to epoch time."""
     if not iso_str:
         return 0
     try:
-        # Handle ISO format with Z suffix
         dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
         return dt.timestamp()
     except (ValueError, AttributeError):
@@ -37,6 +33,93 @@ def parse_filter_time(time_str):
         return datetime.strptime(time_str, '%Y-%m-%d %H:%M').timestamp()
     except ValueError:
         return datetime.strptime(time_str, '%Y-%m-%d').timestamp()
+
+
+def extract_text_content(content_item):
+    if isinstance(content_item, str):
+        return content_item
+    if isinstance(content_item, dict):
+        if content_item.get('type') == 'text':
+            return content_item.get('text', '')
+        if content_item.get('type') == 'thinking':
+            return f"<thinking>\n{content_item.get('thinking', '')}\n</thinking>"
+    return ''
+
+
+def extract_message_text(message_data):
+    if not message_data:
+        return ''
+
+    content = message_data.get('content', '')
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            extracted = extract_text_content(item)
+            if extracted:
+                text_parts.append(extracted)
+        return '\n\n'.join(text_parts)
+
+    return ''
+
+
+def format_agent_label(event_data):
+    agent_id = event_data.get('agentId')
+    agent_slug = event_data.get('slug', '')
+
+    if agent_id:
+        if agent_slug:
+            return f"Agent {agent_id} ({agent_slug})"
+        return f"Agent {agent_id}"
+
+    return None
+
+
+def json_to_markdown(json_data, output_markdown_path):
+    markdown_lines = []
+
+    for session_index, session in enumerate(json_data):
+        session_metadata = session.get('session_metadata', {})
+        session_events = session.get('events', [])
+
+        markdown_lines.append(f"# Conversation Session {session_index + 1}\n")
+        markdown_lines.append(f"**Start:** {session_metadata.get('start_time', 'Unknown')}")
+        markdown_lines.append(f"**End:** {session_metadata.get('end_time', 'Unknown')}")
+        markdown_lines.append(f"**Total Events:** {session_metadata.get('event_count', 0)}\n")
+        markdown_lines.append("---\n")
+
+        for event in session_events:
+            event_type = event.get('type')
+            timestamp_str = event.get('timestamp', '')
+
+            if event_type in ['user', 'assistant']:
+                agent_label = format_agent_label(event)
+                message_data = event.get('message', {})
+                message_role = message_data.get('role', event_type)
+                message_text = extract_message_text(message_data)
+
+                if not message_text:
+                    continue
+
+                if timestamp_str:
+                    timestamp_formatted = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                    time_display = f" - {timestamp_formatted}"
+                else:
+                    time_display = ""
+
+                if agent_label:
+                    markdown_lines.append(f"## {message_role.upper()} [{agent_label}]{time_display}\n")
+                else:
+                    markdown_lines.append(f"## {message_role.upper()}{time_display}\n")
+
+                markdown_lines.append(f"{message_text}\n")
+                markdown_lines.append("---\n")
+
+    with open(output_markdown_path, 'w', encoding='utf-8') as markdown_file:
+        markdown_file.write('\n'.join(markdown_lines))
 
 
 def reconstruct_claude_history(project_directory, start_filter=None, end_filter=None):
@@ -53,7 +136,6 @@ def reconstruct_claude_history(project_directory, start_filter=None, end_filter=
         if not thread_events:
             continue
 
-        # Check if this is a subagent file by looking at the path or agentId field
         is_subagent = ('subagents' in str(file_path) or
                        any('agentId' in event for event in thread_events))
 
@@ -66,7 +148,6 @@ def reconstruct_claude_history(project_directory, start_filter=None, end_filter=
     consumed_subagent_indices = set()
 
     for main_events in main_thread_files:
-        # Convert ISO timestamps to epoch and sort
         for event in main_events:
             event['_epoch_timestamp'] = parse_iso_timestamp(event.get("timestamp"))
 
@@ -92,7 +173,6 @@ def reconstruct_claude_history(project_directory, start_filter=None, end_filter=
                     if index in consumed_subagent_indices:
                         continue
 
-                    # Ensure subagent threads also have epoch timestamps
                     if '_epoch_timestamp' not in sub_thread[0]:
                         for sub_event in sub_thread:
                             sub_event['_epoch_timestamp'] = parse_iso_timestamp(sub_event.get("timestamp"))
@@ -108,7 +188,6 @@ def reconstruct_claude_history(project_directory, start_filter=None, end_filter=
 
         unified_flow.sort(key=lambda x: x.get("_epoch_timestamp", 0))
 
-        # Find first and last events with valid timestamps
         events_with_timestamps = [e for e in unified_flow if e.get("_epoch_timestamp", 0) > 0]
 
         if events_with_timestamps:
@@ -138,15 +217,25 @@ def export_merged_log(project_path, output_filename, start_time=None, end_time=N
 
 if __name__ == "__main__":
     output_directory = Path("output")
-    output_filename = ("conversation_export.json")
+    json_output_filename = "conversation_export.json"
+    markdown_output_filename = "conversation_export.md"
     claude_code_conversation_path = Path("entire_conversation") / "projects_folder"
 
     output_directory.mkdir(parents=True, exist_ok=True)
-    json_output_file = output_directory / output_filename
+    json_output_file = output_directory / json_output_filename
+    markdown_output_file = output_directory / markdown_output_filename
 
     export_merged_log(
         claude_code_conversation_path,
         json_output_file,
-        start_time=None,  # Set to None to include all conversations
+        start_time=None,
         end_time=None
     )
+
+    with open(json_output_file, 'r', encoding='utf-8') as json_file:
+        conversation_data = json.load(json_file)
+
+    json_to_markdown(conversation_data, markdown_output_file)
+
+    print(f"Exported JSON to: {json_output_file}")
+    print(f"Exported Markdown to: {markdown_output_file}")
