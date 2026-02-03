@@ -5,6 +5,7 @@ from datetime import datetime
 
 def load_jsonl_events(file_path):
     events = []
+    fname = Path(file_path).name
     with open(file_path, 'r', encoding='utf-8') as file_handle:
         content = file_handle.read().strip()
     
@@ -23,6 +24,7 @@ def load_jsonl_events(file_path):
         
         try:
             obj, end_idx = decoder.raw_decode(content, idx)
+            obj['_source_file'] = fname
             events.append(obj)
             idx = end_idx
         except json.JSONDecodeError as e:
@@ -149,21 +151,22 @@ def format_agent_label(event_data, agent_name_map):
 def json_to_markdown(json_data, output_directory, min_conversation_length=20):
     output_dir = Path(output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
-
+    
     markdown_files = []
-
+    
     for session_index, session in enumerate(json_data):
         markdown_lines = []
         session_metadata = session.get('session_metadata', {})
         session_events = session.get('events', [])
-
+        
         if len(session_events) < min_conversation_length:
             continue
         
         agent_name_map = extract_agent_name_from_events(session_events)
         
         markdown_lines.append(f"# Conversation\n")
-        markdown_lines.append(f"**Start:** {session_metadata.get('start_time', 'Unknown')}")
+        markdown_lines.append(f"**Main File:** {session_metadata.get('source_file', 'Unknown')}")
+        markdown_lines.append(f"\n**Start:** {session_metadata.get('start_time', 'Unknown')}")
         markdown_lines.append(f"**End:** {session_metadata.get('end_time', 'Unknown')}")
         markdown_lines.append(f"**Total Events:** {session_metadata.get('event_count', 0)}\n")
         markdown_lines.append("---\n")
@@ -174,6 +177,7 @@ def json_to_markdown(json_data, output_directory, min_conversation_length=20):
         for event in session_events:
             event_type = event.get('type')
             timestamp_str = event.get('timestamp', '')
+            source_file = event.get('_source_file', 'Unknown')
             
             if event_type in ['user', 'assistant']:
                 agent_label = format_agent_label(event, agent_name_map)
@@ -184,7 +188,7 @@ def json_to_markdown(json_data, output_directory, min_conversation_length=20):
                 if not message_text:
                     continue
                 
-                current_speaker_key = (message_role, agent_label)
+                current_speaker_key = (message_role, agent_label, source_file)
                 
                 if timestamp_str:
                     timestamp_formatted = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
@@ -197,15 +201,17 @@ def json_to_markdown(json_data, output_directory, min_conversation_length=20):
                         markdown_lines.append("---\n")
                         grouped_messages = []
                     
+                    header = f"## {message_role.upper()}"
                     if agent_label:
-                        markdown_lines.append(f"## {message_role.upper()} [{agent_label}]\n")
-                    else:
-                        markdown_lines.append(f"## {message_role.upper()}\n")
+                        header += f" [{agent_label}]"
                     
+                    markdown_lines.append(f"{header}\n")
+                    if source_file != session_metadata.get('source_file'):
+                        markdown_lines.append(f"**Subagent File:** {source_file}\n")
                     previous_speaker_key = current_speaker_key
                 
                 if timestamp_formatted:
-                    grouped_messages.append(f"{timestamp_formatted}")
+                    grouped_messages.append(f"`{timestamp_formatted}`")
                 grouped_messages.append(f"{message_text}\n")
         
         if grouped_messages:
@@ -250,12 +256,12 @@ def reconstruct_claude_history(project_directory, start_filter=None, end_filter=
         if is_subagent:
             subagent_threads.append(thread_events)
         else:
-            main_thread_files.append(thread_events)
+            main_thread_files.append((file_path, thread_events))
     
     all_reconstructed_conversations = []
     consumed_subagent_indices = set()
     
-    for main_events in main_thread_files:
+    for file_path, main_events in main_thread_files:
         for event in main_events:
             event['_epoch_timestamp'] = parse_iso_timestamp(event.get("timestamp"))
         
@@ -311,7 +317,8 @@ def reconstruct_claude_history(project_directory, start_filter=None, end_filter=
             "session_metadata": {
                 "start_time": start_time,
                 "end_time": end_time,
-                "event_count": len(unified_flow)
+                "event_count": len(unified_flow),
+                "source_file": Path(file_path).name
             },
             "events": unified_flow
         })
@@ -344,7 +351,7 @@ if __name__ == "__main__":
     
     with open(json_output_file, 'r', encoding='utf-8') as json_file:
         conversation_data = json.load(json_file)
-
+    
     markdown_files = json_to_markdown(conversation_data, output_directory, min_conversation_length=20)
     
     print(f"Exported JSON to: {json_output_file}")
