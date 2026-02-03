@@ -146,16 +146,19 @@ def format_agent_label(event_data, agent_name_map):
     return None
 
 
-def json_to_markdown(json_data, output_directory):
+def json_to_markdown(json_data, output_directory, min_conversation_length=20):
     output_dir = Path(output_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     markdown_files = []
-    
+
     for session_index, session in enumerate(json_data):
         markdown_lines = []
         session_metadata = session.get('session_metadata', {})
         session_events = session.get('events', [])
+
+        if len(session_events) < min_conversation_length:
+            continue
         
         agent_name_map = extract_agent_name_from_events(session_events)
         
@@ -341,8 +344,8 @@ if __name__ == "__main__":
     
     with open(json_output_file, 'r', encoding='utf-8') as json_file:
         conversation_data = json.load(json_file)
-    
-    markdown_files = json_to_markdown(conversation_data, output_directory)
+
+    markdown_files = json_to_markdown(conversation_data, output_directory, min_conversation_length=20)
     
     print(f"Exported JSON to: {json_output_file}")
     print(f"Exported {len(markdown_files)} Markdown files to: {output_directory}")
