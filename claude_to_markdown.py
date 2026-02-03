@@ -66,14 +66,62 @@ def extract_message_text(message_data):
     return ''
 
 
-def format_agent_label(event_data):
+def extract_agent_name_from_events(events_list):
+    agent_names = {}
+    agent_type_by_timestamp = {}
+
+    for event in events_list:
+        if event.get('type') == 'assistant' and not event.get('agentId'):
+            message_data = event.get('message', {})
+            content = message_data.get('content', [])
+
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get('type') == 'tool_use':
+                        if item.get('name') == 'Task':
+                            tool_input = item.get('input', {})
+                            subagent_type = tool_input.get('subagent_type', '')
+                            if subagent_type:
+                                event_timestamp = event.get('_epoch_timestamp', 0)
+                                agent_type_by_timestamp[event_timestamp] = subagent_type
+
+    for event in events_list:
+        agent_id = event.get('agentId')
+        if not agent_id or agent_id in agent_names:
+            continue
+
+        if event.get('type') == 'user':
+            message_data = event.get('message', {})
+            content = message_data.get('content', '')
+
+            if isinstance(content, str) and 'You are' in content:
+                lines = content.split('\n')
+                first_line = lines[0]
+
+                if first_line.startswith('You are '):
+                    agent_name = first_line.replace('You are ', '').split(',')[0].split('.')[0].strip()
+                    agent_names[agent_id] = agent_name
+            else:
+                event_timestamp = event.get('_epoch_timestamp', 0)
+                closest_task_timestamp = min(
+                    agent_type_by_timestamp.keys(),
+                    key=lambda ts: abs(ts - event_timestamp),
+                    default=None
+                )
+                if closest_task_timestamp and abs(closest_task_timestamp - event_timestamp) < 5:
+                    agent_names[agent_id] = agent_type_by_timestamp[closest_task_timestamp]
+
+    return agent_names
+
+
+def format_agent_label(event_data, agent_name_map):
     agent_id = event_data.get('agentId')
-    agent_slug = event_data.get('slug', '')
 
     if agent_id:
-        if agent_slug:
-            return f"Agent {agent_id} ({agent_slug})"
-        return f"Agent {agent_id}"
+        agent_name = agent_name_map.get(agent_id)
+        if agent_name:
+            return f"@{agent_name}"
+        return f"Agent-{agent_id}"
 
     return None
 
@@ -84,6 +132,8 @@ def json_to_markdown(json_data, output_markdown_path):
     for session_index, session in enumerate(json_data):
         session_metadata = session.get('session_metadata', {})
         session_events = session.get('events', [])
+
+        agent_name_map = extract_agent_name_from_events(session_events)
 
         markdown_lines.append(f"# Conversation Session {session_index + 1}\n")
         markdown_lines.append(f"**Start:** {session_metadata.get('start_time', 'Unknown')}")
@@ -96,7 +146,7 @@ def json_to_markdown(json_data, output_markdown_path):
             timestamp_str = event.get('timestamp', '')
 
             if event_type in ['user', 'assistant']:
-                agent_label = format_agent_label(event)
+                agent_label = format_agent_label(event, agent_name_map)
                 message_data = event.get('message', {})
                 message_role = message_data.get('role', event_type)
                 message_text = extract_message_text(message_data)
