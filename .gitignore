@@ -1,3 +1,4 @@
 .env
 .idea
 .venv
+all_conversations/
